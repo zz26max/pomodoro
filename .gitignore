@@ -1,0 +1,20 @@
+# 构建产物 —— 由 src/ 生成，不要手改
+index.html
+番茄钟-单文件.html
+
+# 截图 / 测试产物
+.shots/
+
+# 依赖（本项目零依赖，这几行只是防止误装）
+node_modules/
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+
+# 操作系统 / 编辑器
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp

@@ -1,0 +1,23 @@
+{
+  "name": "pomodoro",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "一个零依赖的番茄钟：任务清单、今日统计、暗色模式。原生 HTML / CSS / JS。",
+  "scripts": {
+    "build": "node src/build.mjs",
+    "dev": "node src/serve.mjs",
+    "preview": "node src/build.mjs && node src/serve.mjs",
+    "test": "node src/test-functional.mjs && node src/test-flow.mjs && node src/test-ui.mjs && node src/test-narrow.mjs && node src/test-boot.mjs && node src/test-single.mjs",
+    "test:functional": "node src/test-functional.mjs",
+    "test:flow": "node src/test-flow.mjs",
+    "test:ui": "node src/test-ui.mjs",
+    "test:narrow": "node src/test-narrow.mjs",
+    "test:boot": "node src/test-boot.mjs",
+    "test:single": "node src/test-single.mjs",
+    "shoot": "node src/shoot.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
