@@ -1,6 +1,8 @@
-# 构建产物 —— 由 src/ 生成，不要手改
-index.html
-番茄钟-单文件.html
+# 构建产物 —— 由 src/ 生成，不要手改。
+# 注意：这两个文件**必须入库**，GitHub Pages 直接从 main 分支根目录发布；
+# 一旦忽略它们，线上会退化成由 Jekyll 渲染 README.md，番茄钟本身打不开。
+# index.html
+# 番茄钟-单文件.html
 
 # 截图 / 测试产物
 .shots/

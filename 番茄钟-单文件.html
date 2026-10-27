@@ -1,0 +1,2607 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>番茄钟 · 专注计时器</title>
+<meta name="description" content="一个极简的番茄钟：专注 25 分钟，休息 5 分钟。带任务清单、今日统计与暗色模式。无需登录，数据只存在本地浏览器。">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#141416" media="(prefers-color-scheme: dark)">
+<!-- 内联 SVG 图标，避免额外请求 -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='none' stroke='%23c0392b' stroke-width='3'/%3E%3C/svg%3E">
+<!-- 先于样式表做两件事，避免闪烁：
+     1. 标记「JS 可用」—— 入场动效的初始态只挂在 .js 下
+     2. 把已保存的主题写到 <html> 上 —— 否则暗色用户会看到一瞬白屏 -->
+<script>
+document.documentElement.classList.add("js");
+(function () {
+  try {
+    var saved = localStorage.getItem("pomodoro:v2");
+    var t = saved ? (JSON.parse(saved) || {}).theme : null;
+    if (t === "dark" || t === "light") {
+      document.documentElement.setAttribute("data-theme", t);
+    }
+  } catch (e) {}
+})();
+</script>
+<style>
+/* 跨文档 View Transitions：从 zz26max.github.io 主站（zz-works）跳进来时整页淡换。
+   跨文档过渡要求两侧文档都声明 —— 主站与另外两个小玩意仓库也带同一条。
+   不支持的浏览器自动回落成普通跳转。 */
+@view-transition {
+  navigation: auto;
+}
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*),
+  ::view-transition-image-pair(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none !important;
+  }
+}
+
+/* ==========================================================================
+   番茄钟 —— 全部样式（独立项目）
+   --------------------------------------------------------------------------
+   这个文件是自包含的：设计令牌全部定义在下面，不依赖任何外部 CSS。
+
+   ├─ 00  设计令牌（灰阶 / 字体 / 字号 / 间距 / 动效）
+   ├─ 01  暗色令牌
+   ├─ 02  基础与重置
+   ├─ 03  页壳（header / footer / skip）
+   ├─ 04  番茄钟主体（计时环 / 数字 / 进度点 / 状态线 / 按钮）
+   ├─ 05  今日统计
+   ├─ 06  任务列表
+   ├─ 07  设置
+   ├─ 08  动效
+   ├─ 09  响应式
+   └─ 10  打印
+
+   设计纪律：
+     - 彩色只出现在「环 / 数字 / 状态线 / 进度点」上，绝不铺大面积底色
+     - 暗色下不改令牌名，只改令牌值，组件样式一份代码吃两套
+     - 零第三方依赖、零 Web Font 请求（字体全走系统栈）
+   ========================================================================== */
+
+/* ==========================================================================
+   00 设计令牌 —— 想整体换调性，只改这一段
+   ========================================================================== */
+:root {
+  /* —— 色彩：中性偏冷的 Zinc 灰阶 ——
+     六阶；语义映射在下面，组件只该用语义名（--fg / --bg），不要直接写 --ink */
+  --ink: #18181b;         /* 正文 / 深色底 */
+  --ink-2: #3f3f46;       /* 次级文字 */
+  --ink-3: #52525b;       /* 元信息 / 标签 */
+  --ink-4: #a1a1aa;       /* 弱化信息 / 装饰（不承载信息时用） */
+  --paper: #f7f7f5;       /* 浅色区块底（比纯白暖一档） */
+  --white: #ffffff;       /* 主背景 */
+  --line: #e4e4e7;        /* 1px 细线 */
+
+  /* 语义映射 */
+  --fg: var(--ink);
+  --fg-muted: var(--ink-2);
+  --fg-subtle: var(--ink-3);
+  /* ⚠️ --ink-4 在白底只有 2.4:1，**不能用来写字**，只能给装饰 */
+  --fg-faint: var(--ink-3);
+  --bg: var(--white);
+  --bg-alt: var(--paper);
+
+  /* 反白底（深色块） */
+  --inv-bg: var(--ink);
+  --inv-fg: var(--white);
+  --inv-muted: #d4d4d8;
+  --inv-line: #3f3f46;
+
+  /* —— 功能色：本项目的唯一彩色 ——
+     只用于细环 / 倒计时数字 / 1px 状态线 / 进度点 / 勾选框，
+     不用于任何背景填充。 */
+  --focus: #c0392b;        /* 专注中：番茄红 */
+  --focus-soft: #e8d3d0;   /* 环底，约 12% 浓度 */
+  --rest: #2f7a63;         /* 休息中：墨绿 */
+  --rest-soft: #d3e2dd;
+
+  /* —— 字体：全系统栈，零请求 ——
+     兜底链必须含中文衬线，否则断网/缺字时标题会掉成黑体 */
+  --font-serif: "Noto Serif SC", "Songti SC", "STSong", "SimSun", "Source Han Serif SC",
+    serif;
+  --font-sans: "Noto Sans SC", "PingFang SC", "HarmonyOS Sans SC", "Microsoft YaHei",
+    "Hiragino Sans GB", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* —— 字号阶梯 —— */
+  --fs-h2: clamp(30px, 4vw, 52px);
+  --fs-lead: 17px;
+  --fs-body: 16px;
+  --fs-small: 14px;
+  --fs-label: 12px;
+
+  /* —— 栅格与留白 —— */
+  --maxw: 1280px;
+  --gutter: clamp(20px, 5vw, 72px);
+  --header-h: 64px;
+  --pomo-gap: clamp(24px, 4vh, 36px);
+
+  /* —— 圆角：接近 0，这是锐利感的来源 —— */
+  --r: 2px;
+
+  /* —— 动效：只留四种动作（浮起 / 显现 / 擦除 / 画线）——
+     刻意不做视差、打字机、数字计数、跑马灯。 */
+  --mo-step: 80ms;
+  --mo-base: 0.72s;
+  --mo-slow: 1.1s;
+  --mo-clip: 1.2s;
+  /* easeOutQuint：起步快、收尾极慢 */
+  --mo-ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+  /* 更软：收尾几乎不带惯性，用于悬停 */
+  --mo-ease-soft: cubic-bezier(0.33, 0.9, 0.4, 1);
+
+  /* 工具页局部：卡片底色 */
+  --pomo-card: var(--white);
+
+  color-scheme: light;
+}
+
+/* 暗色：把主站令牌整体翻过来，再单独校正功能色。
+   ------------------------------------------------------------------------
+   两套触发方式，值必须一致：
+     1. @media (prefers-color-scheme: dark) —— 跟随系统
+     2. [data-theme="dark"]               —— 用户在设置里手动选暗色
+   把值抽成一组自定义属性再复用，避免两处漂移。
+   注意 [data-theme] 必须能压过媒体查询，所以单选器优先级要够
+   （html[data-theme=...] 有 0,1,1 的优先级，媒体查询本身不增加优先级，
+    因此靠「后出现」+ 同为 :root 级不足以覆盖 —— 用属性选择器提高优先级）。 */
+
+:root {
+  --dark-ink: #ededf0;
+  --dark-ink-2: #c8c8ce;
+  --dark-ink-3: #9a9aa2;
+  --dark-ink-4: #5c5c66;
+  --dark-paper: #1c1c1f;
+  --dark-white: #141416;
+  --dark-line: #2e2e33;
+  --dark-inv-bg: #ededf0;
+  --dark-inv-fg: #141416;
+  --dark-inv-muted: #4a4a52;
+  --dark-inv-line: #3a3a41;
+  --dark-focus: #e8615a;
+  --dark-focus-soft: #3a2523;
+  --dark-rest: #5fb99b;
+  --dark-rest-soft: #1f302c;
+}
+
+/* —— 暗色令牌的实际赋值：媒体查询与属性选择器共用同一段 —— */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ink: var(--dark-ink);
+    --ink-2: var(--dark-ink-2);
+    --ink-3: var(--dark-ink-3);
+    --ink-4: var(--dark-ink-4);
+    --paper: var(--dark-paper);
+    --white: var(--dark-white);
+    --line: var(--dark-line);
+
+    --fg: var(--ink);
+    --fg-muted: var(--ink-2);
+    --fg-subtle: var(--ink-3);
+    --fg-faint: var(--ink-3);
+    --bg: var(--white);
+    --bg-alt: var(--paper);
+
+    --inv-bg: var(--dark-inv-bg);
+    --inv-fg: var(--dark-inv-fg);
+    --inv-muted: var(--dark-inv-muted);
+    --inv-line: var(--dark-inv-line);
+
+    --focus: var(--dark-focus);
+    --focus-soft: var(--dark-focus-soft);
+    --rest: var(--dark-rest);
+    --rest-soft: var(--dark-rest-soft);
+
+    --pomo-card: var(--dark-paper);
+
+    color-scheme: dark;
+  }
+}
+
+/* 手动选暗：无视系统设置。
+   选择器用 html[data-theme="dark"]:root（优先级 0,2,1），
+   高于系统暗色的 :root:not([data-theme="light"])（0,2,0），
+   也高于 :root（0,1,0）—— 所以三种组合都成立：
+     系统亮 + 选手动暗 → 暗
+     系统暗 + 选手动暗 → 暗
+     系统暗 + 选手动亮 → :not 使媒体查询不生效 → 亮 */
+html[data-theme="dark"]:root {
+  --ink: var(--dark-ink);
+  --ink-2: var(--dark-ink-2);
+  --ink-3: var(--dark-ink-3);
+  --ink-4: var(--dark-ink-4);
+  --paper: var(--dark-paper);
+  --white: var(--dark-white);
+  --line: var(--dark-line);
+
+  --fg: var(--ink);
+  --fg-muted: var(--ink-2);
+  --fg-subtle: var(--ink-3);
+  --fg-faint: var(--ink-3);
+  --bg: var(--white);
+  --bg-alt: var(--paper);
+
+  --inv-bg: var(--dark-inv-bg);
+  --inv-fg: var(--dark-inv-fg);
+  --inv-muted: var(--dark-inv-muted);
+  --inv-line: var(--dark-inv-line);
+
+  --focus: var(--dark-focus);
+  --focus-soft: var(--dark-focus-soft);
+  --rest: var(--dark-rest);
+  --rest-soft: var(--dark-rest-soft);
+
+  --pomo-card: var(--dark-paper);
+
+  color-scheme: dark;
+}
+
+/* 亮色是默认值（已在 00 段声明 color-scheme: light）。
+   暗色的 color-scheme 由上面两处负责。
+   ⚠️ 这里不能再写无条件 :root{color-scheme:light} ——
+   它出现在暗色规则之后，会把系统暗色下的设置覆盖掉，
+   导致数字输入框的箭头、复选框仍是亮色渲染。 */
+html[data-theme="light"]:root {
+  color-scheme: light;
+}
+
+/* ==========================================================================
+   02 基础与重置
+   ========================================================================== */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+  scroll-padding-top: calc(var(--header-h) + 16px);
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  font-size: var(--fs-body);
+  line-height: 1.75;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* ⚠️ 不写 body{overflow-x:hidden} ——
+   它会把溢出传播到视口、破坏 position:sticky 吸顶导航。
+   出血元素一律由各自区块自己 overflow:hidden。 */
+
+img,
+svg {
+  display: block;
+  max-width: 100%;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+/* 键盘可达性：只在键盘导航时显示焦点圈 */
+:focus-visible {
+  outline: 2px solid var(--fg);
+  outline-offset: 3px;
+}
+
+/* 版心 */
+.wrap {
+  width: 100%;
+  max-width: var(--maxw);
+  margin-inline: auto;
+  padding-inline: var(--gutter);
+}
+
+/* 跳到主内容（读屏与键盘用户的第一站） */
+.skip {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 999;
+  padding: 10px 16px;
+  background: var(--ink);
+  color: var(--white);
+  font-size: var(--fs-small);
+}
+.skip:focus {
+  left: 0;
+}
+
+/* ==========================================================================
+   03 页壳：header / footer
+   ========================================================================== */
+.header {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+}
+
+.header__inner {
+  height: var(--header-h);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.header__brand {
+  font-family: var(--font-serif);
+  font-size: 19px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+
+.header__nav {
+  display: flex;
+  align-items: center;
+  gap: 28px;
+}
+
+.header__link {
+  position: relative;
+  font-size: var(--fs-small);
+  color: var(--fg-muted);
+  transition: color 0.24s var(--mo-ease-soft);
+}
+/* 下划线由伪元素从 0 长到 100% ——
+   直接改 border-bottom 会让文字在悬停时抖一下 */
+.header__link::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: -4px;
+  width: 100%;
+  height: 1px;
+  background: currentColor;
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform 0.28s var(--mo-ease-soft);
+}
+.header__link:hover {
+  color: var(--fg);
+}
+.header__link:hover::after {
+  transform: scaleX(1);
+}
+/* 当前页：常驻下划线 */
+.header__link[aria-current="page"] {
+  color: var(--fg);
+}
+.header__link[aria-current="page"]::after {
+  transform: scaleX(1);
+}
+
+/* 移动端汉堡按钮：桌面隐藏 */
+.header__toggle {
+  display: none;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border-radius: var(--r);
+}
+.header__toggle span,
+.header__toggle span::before,
+.header__toggle span::after {
+  content: "";
+  display: block;
+  width: 18px;
+  height: 1px;
+  background: var(--fg);
+  transition: transform 0.28s var(--mo-ease-soft), opacity 0.2s linear;
+}
+.header__toggle span::before {
+  transform: translateY(-6px);
+}
+.header__toggle span::after {
+  transform: translateY(5px);
+}
+
+/* 阅读进度线（本页很短，意义不大，但保持与项目风格一致；
+   由 main.js 驱动 --p） */
+.header__progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 1px;
+  background: var(--ink);
+  transform: scaleX(var(--p, 0));
+  transform-origin: left center;
+}
+
+.footer {
+  background: var(--bg-alt);
+  padding-block: 40px;
+  border-top: 1px solid var(--line);
+}
+
+.footer__inner {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: var(--fs-small);
+  color: var(--fg-muted);
+}
+.footer__inner p {
+  margin: 0;
+}
+.footer__inner a {
+  transition: color 0.24s var(--mo-ease-soft);
+}
+.footer__inner a:hover {
+  color: var(--fg);
+}
+
+/* ==========================================================================
+   04 番茄钟主体
+   ========================================================================== */
+.pomo {
+  min-height: calc(100svh - var(--header-h));
+  display: grid;
+  /* ⚠️ 这里必须显式给出可压缩的轨道，不能只写 place-items。
+     ----------------------------------------------------------------------
+     踩过的真 bug：原先写的是 `place-items: start center`，
+     center 会让栅格轨道按**内容宽度（max-content）**定宽 —— 实测 319px。
+     宽屏下 max-content < 视口，看不出来；一旦视口窄到 300px 上下
+     （浏览器侧边栏就是这种宽度），轨道仍然是 319px，整页横向溢出，
+     「添加」按钮被推出右边界，用户点它自然「没反应」。
+     minmax(0, 1fr) 强制轨道不超过容器宽度，内容再自行收缩。 */
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  justify-items: center;
+  padding-block: clamp(40px, 7vh, 80px);
+}
+
+.pomo__inner {
+  width: 100%;
+  max-width: 640px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--pomo-gap);
+}
+
+.pomo__eyebrow {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--fg-subtle);
+}
+
+.pomo__title {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: clamp(24px, 4vw, 34px);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+  text-align: center;
+}
+
+/* 副标题：一句话说明怎么用。克制到几乎退到背景里 */
+.pomo__lead {
+  margin: -8px 0 0;
+  max-width: 46ch;
+  font-size: var(--fs-small);
+  line-height: 1.7;
+  color: var(--fg-subtle);
+  text-align: center;
+}
+
+/* ==========================================================================
+   05 计时环
+   ========================================================================== */
+.pomo__dial {
+  position: relative;
+  /* viewBox 116 里圆只占 108（93%），比原来的 100/104 略小，
+     所以把容器调大一点，视觉直径与之前基本一致。 */
+  width: min(76vw, 300px);
+  aspect-ratio: 1;
+  display: grid;
+  place-items: center;
+}
+
+.pomo__ring {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  /* 从 12 点方向起画 */
+  transform: rotate(-90deg);
+  /* 双保险：即使 viewBox 没留够余量，也不要把描边裁掉。
+     （真正的原因是 viewBox 尺寸，见 src/index.mjs 的 RING_BOX 注释；
+      这行只是防止以后改尺寸时又踩同一个坑。） */
+  overflow: visible;
+}
+
+.pomo__ring circle {
+  fill: none;
+  stroke-width: 4;
+}
+
+.pomo__ring .is-track {
+  stroke: var(--line);
+}
+
+.pomo__ring .is-progress {
+  /* 兜底周长：2πr，r=52 → 326.73。
+     真实值由 JS 按 RADIUS 实算后覆盖 —— 这里只保证 JS 没跑时也有个合理值。 */
+  stroke-dasharray: 326.73;
+  stroke-dashoffset: 0;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.9s linear, stroke 0.4s var(--mo-ease-soft);
+}
+
+/* —— 阶段配色：环 + 数字 + 状态线 —— */
+.pomo[data-phase="focus"] .pomo__ring .is-progress {
+  stroke: var(--focus);
+}
+.pomo[data-phase="short"] .pomo__ring .is-progress,
+.pomo[data-phase="long"] .pomo__ring .is-progress {
+  stroke: var(--rest);
+}
+
+.pomo[data-phase="focus"] .pomo__ring .is-track {
+  stroke: var(--focus-soft);
+}
+.pomo[data-phase="short"] .pomo__ring .is-track,
+.pomo[data-phase="long"] .pomo__ring .is-track {
+  stroke: var(--rest-soft);
+}
+
+/* ==========================================================================
+   06 倒计时数字
+   ========================================================================== */
+.pomo__time {
+  position: relative;
+  font-family: var(--font-mono);
+  font-size: clamp(48px, 12vw, 82px);
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg);
+  transition: color 0.4s var(--mo-ease-soft);
+}
+
+.pomo[data-phase="focus"] .pomo__time {
+  color: var(--focus);
+}
+.pomo[data-phase="short"] .pomo__time,
+.pomo[data-phase="long"] .pomo__time {
+  color: var(--rest);
+}
+
+.pomo__label {
+  margin: 10px 0 0;
+  font-size: var(--fs-small);
+  letter-spacing: 0.08em;
+  color: var(--fg-subtle);
+  text-align: center;
+}
+
+/* ==========================================================================
+   07 阶段进度点
+   ========================================================================== */
+.pomo__steps {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pomo__step {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 1px solid var(--ink-4);
+  background: transparent;
+  transition: background-color 0.3s var(--mo-ease-soft),
+    border-color 0.3s var(--mo-ease-soft), transform 0.3s var(--mo-ease-soft);
+}
+
+/* 已完成：实心番茄红 */
+.pomo__step.is-done {
+  background: var(--focus);
+  border-color: var(--focus);
+  transform: scale(1.12);
+}
+
+/* 当前正在进行的那一个：描边加粗提示 */
+.pomo__step.is-now {
+  border-color: var(--focus);
+  border-width: 2px;
+}
+
+/* ==========================================================================
+   08 状态线
+   ========================================================================== */
+.pomo__status-line {
+  width: 100%;
+  height: 1px;
+  background: var(--line);
+  position: relative;
+  overflow: hidden;
+}
+
+.pomo__status-line::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--focus);
+  transform-origin: left center;
+  transform: scaleX(var(--p, 0));
+  transition: transform 0.9s linear, background-color 0.4s var(--mo-ease-soft);
+}
+
+.pomo[data-phase="short"] .pomo__status-line::after,
+.pomo[data-phase="long"] .pomo__status-line::after {
+  background: var(--rest);
+}
+
+/* ==========================================================================
+   09 控制按钮
+   ========================================================================== */
+.pomo__controls {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 12px;
+}
+
+.pomo__btn {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: var(--pomo-card);
+  color: var(--fg);
+  font-family: inherit;
+  font-size: var(--fs-small);
+  letter-spacing: 0.04em;
+  padding: 11px 22px;
+  border-radius: var(--r);
+  cursor: pointer;
+  transition: background-color 0.26s var(--mo-ease-soft),
+    color 0.26s var(--mo-ease-soft), border-color 0.26s var(--mo-ease-soft),
+    transform 0.26s var(--mo-ease-soft);
+}
+
+.pomo__btn:hover {
+  border-color: var(--ink-4);
+  transform: translateY(-1px);
+}
+
+.pomo__btn:active {
+  transform: translateY(0);
+}
+
+.pomo__btn:focus-visible {
+  outline: 2px solid var(--fg);
+  outline-offset: 3px;
+}
+
+.pomo__btn--primary {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--inv-fg);
+  min-width: 116px;
+}
+.pomo__btn--primary:hover {
+  background: var(--ink-2);
+  border-color: var(--ink-2);
+}
+
+.pomo__btn--ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--fg-subtle);
+  padding-inline: 14px;
+}
+.pomo__btn--ghost:hover {
+  color: var(--fg);
+  border-color: var(--line);
+}
+
+.pomo__btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* ==========================================================================
+   10 今日统计
+   --------------------------------------------------------------------------
+   三个数字横排。刻意不做图表 —— 自用场景下数字比图更直接，
+   也避免引入 canvas 这种"重"的东西。
+   ========================================================================== */
+.pomo__stats {
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1px;
+  /* 用 1px 间隙 + 底色形成分隔线，比给每个格子加 border 更干净 */
+  background: var(--line);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  overflow: hidden;
+}
+
+.pomo__stat {
+  background: var(--pomo-card);
+  padding: 16px 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  text-align: center;
+}
+
+.pomo__stat b {
+  font-family: var(--font-mono);
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg);
+}
+
+.pomo__stat span {
+  font-size: var(--fs-label);
+  letter-spacing: 0.04em;
+  color: var(--fg-subtle);
+}
+
+/* ==========================================================================
+   11 任务列表
+   ========================================================================== */
+.pomo__tasks {
+  width: 100%;
+  border-top: 1px solid var(--line);
+  padding-top: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.pomo__tasks-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0;
+}
+
+.pomo__tasks-title {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--fg-subtle);
+}
+
+.pomo__tasks-count {
+  font-size: var(--fs-label);
+  color: var(--fg-subtle);
+  font-variant-numeric: tabular-nums;
+}
+
+/* —— 新增任务：输入 + 提交 —— */
+.pomo__task-add {
+  display: flex;
+  gap: 8px;
+}
+
+.pomo__task-input {
+  flex: 1;
+  min-width: 0;
+  font-family: inherit;
+  font-size: var(--fs-small);
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--pomo-card);
+  color: var(--fg);
+  transition: border-color 0.26s var(--mo-ease-soft);
+}
+.pomo__task-input::placeholder {
+  color: var(--ink-4);
+}
+.pomo__task-input:focus {
+  outline: none;
+  border-color: var(--fg);
+}
+.pomo__task-input:focus-visible {
+  outline: 2px solid var(--fg);
+  outline-offset: 2px;
+}
+
+/* 「添加」按钮
+   ----------------------------------------------------------------------------
+   早先只给了 --line 那种极浅的 1px 边框，在白色输入框旁边几乎看不见，
+   整体读起来像一块**静态的灰色方块**而不是按钮 —— 用户会以为它不可点。
+   现在：实心深底 + 反白字，明确是「可以按」的主操作。
+   它不与计时区的「开始」抢视觉（那里更大、更居中），此处只是行内小动作。 */
+.pomo__task-submit {
+  flex: 0 0 auto;
+  padding: 10px 20px;
+  border: 1px solid var(--ink);
+  border-radius: var(--r);
+  background: var(--ink);
+  color: var(--inv-fg);
+  font-family: inherit;
+  font-size: var(--fs-small);
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: background-color 0.24s var(--mo-ease-soft),
+    border-color 0.24s var(--mo-ease-soft), transform 0.24s var(--mo-ease-soft);
+}
+.pomo__task-submit:hover {
+  background: var(--ink-2);
+  border-color: var(--ink-2);
+  transform: translateY(-1px);
+}
+.pomo__task-submit:active {
+  transform: translateY(0);
+}
+.pomo__task-submit:focus-visible {
+  outline: 2px solid var(--fg);
+  outline-offset: 2px;
+}
+
+/* 空输入时的抖动提示：告诉用户「按钮收到了点击，但还缺内容」。
+   位移很小（3px），不抢戏；减少动效时整段关掉。 */
+@keyframes pomo-nudge {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-3px); }
+  75% { transform: translateX(3px); }
+}
+.pomo__task-add.is-nudge {
+  animation: pomo-nudge 0.36s var(--mo-ease-soft);
+}
+/* 抖动时把输入框边框也强调一下，指出该填哪里 */
+.pomo__task-add.is-nudge .pomo__task-input {
+  border-color: var(--focus);
+}
+
+/* 空输入提示：低调一行小字，不是报错。
+   元素常驻 DOM（live region，便于读屏播报），没有文字时用 :empty 收掉占位。 */
+.pomo__task-hint {
+  margin: 8px 0 0;
+  font-size: var(--fs-label);
+  line-height: 1.6;
+  color: var(--focus);
+}
+.pomo__task-hint:empty {
+  display: none;
+}
+
+/* 启动自检报警条 —— 只在脚本没跑起来时出现。
+   用醒目的边框和底色，因为它说明的是「功能整体不可用」，不是小提示。 */
+.pomo__alert {
+  margin: 0 auto 32px;
+  max-width: 640px;
+  padding: 14px 18px;
+  border: 1px solid var(--focus);
+  border-left-width: 3px;
+  border-radius: var(--r);
+  background: var(--focus-soft);
+  color: var(--fg);
+  font-size: var(--fs-small);
+  line-height: 1.7;
+}
+.pomo__alert[hidden] {
+  display: none;
+}
+
+/* —— 任务条目 —— */
+.pomo__task-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+}
+
+.pomo__task-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: var(--fs-small);
+  line-height: 1.5;
+}
+.pomo__task-item:last-child {
+  border-bottom: none;
+}
+
+/* 用原生 checkbox，但配色跟随功能色 */
+.pomo__task-check {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  margin: 2px 0 0;
+  accent-color: var(--focus);
+  cursor: pointer;
+}
+.pomo__task-check:focus-visible {
+  outline: 2px solid var(--fg);
+  outline-offset: 2px;
+}
+
+.pomo__task-text {
+  flex: 1;
+  min-width: 0;
+  color: var(--fg);
+  /* 长任务名换行而不是撑破布局 */
+  overflow-wrap: anywhere;
+}
+
+/* 已完成：划掉 + 变灰 */
+.pomo__task-item.is-done .pomo__task-text {
+  text-decoration: line-through;
+  color: var(--fg-subtle);
+}
+
+.pomo__task-del {
+  flex: 0 0 auto;
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--ink-4);
+  font-size: 15px;
+  line-height: 1;
+  padding: 2px 4px;
+  cursor: pointer;
+  border-radius: var(--r);
+  transition: color 0.24s var(--mo-ease-soft);
+}
+.pomo__task-del:hover {
+  color: var(--focus);
+}
+.pomo__task-del:focus-visible {
+  outline: 2px solid var(--fg);
+  outline-offset: 2px;
+}
+
+/* 空状态 */
+.pomo__task-empty {
+  margin: 0;
+  padding: 12px 0;
+  font-size: var(--fs-label);
+  color: var(--fg-subtle);
+}
+.pomo__task-empty[hidden] {
+  display: none;
+}
+
+/* ==========================================================================
+   12 设置
+   ========================================================================== */
+.pomo__settings {
+  width: 100%;
+  border-top: 1px solid var(--line);
+  padding-top: 20px;
+}
+
+.pomo__settings summary {
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--fg-subtle);
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: color 0.26s var(--mo-ease-soft);
+}
+.pomo__settings summary::-webkit-details-marker {
+  display: none;
+}
+.pomo__settings summary::before {
+  content: "+";
+  font-size: 13px;
+  line-height: 1;
+}
+.pomo__settings[open] summary::before {
+  content: "−";
+}
+.pomo__settings summary:hover {
+  color: var(--fg);
+}
+.pomo__settings summary:focus-visible {
+  outline: 2px solid var(--fg);
+  outline-offset: 3px;
+}
+
+.pomo__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 18px 24px;
+  margin-top: 22px;
+}
+
+.pomo__field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.pomo__field label {
+  font-size: var(--fs-label);
+  letter-spacing: 0.06em;
+  color: var(--fg-subtle);
+}
+
+.pomo__field input {
+  font-family: var(--font-mono);
+  font-size: var(--fs-small);
+  font-variant-numeric: tabular-nums;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--pomo-card);
+  color: var(--fg);
+  width: 100%;
+  transition: border-color 0.26s var(--mo-ease-soft);
+}
+
+.pomo__field input:focus {
+  outline: none;
+  border-color: var(--fg);
+}
+.pomo__field input:focus-visible {
+  outline: 2px solid var(--fg);
+  outline-offset: 2px;
+}
+
+.pomo__hint {
+  margin: 18px 0 0;
+  font-size: var(--fs-label);
+  line-height: 1.8;
+  color: var(--fg-subtle);
+}
+
+/* 主题选择（跟随系统 / 始终亮 / 始终暗） */
+.pomo__theme {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+}
+
+.pomo__theme-label {
+  font-size: var(--fs-label);
+  color: var(--fg-subtle);
+  letter-spacing: 0.06em;
+}
+
+.pomo__radio {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-small);
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+
+.pomo__radio input {
+  accent-color: var(--focus);
+  cursor: pointer;
+  margin: 0;
+}
+.pomo__radio input:focus-visible {
+  outline: 2px solid var(--fg);
+  outline-offset: 2px;
+}
+
+/* 通知授权按钮 */
+.pomo__notify {
+  margin-top: 14px;
+  font-size: var(--fs-label);
+  padding: 7px 14px;
+  border: 1px dashed var(--ink-4);
+  background: transparent;
+  color: var(--fg-muted);
+  border-radius: var(--r);
+  cursor: pointer;
+  font-family: inherit;
+  letter-spacing: 0.04em;
+  transition: border-color 0.26s var(--mo-ease-soft), color 0.26s var(--mo-ease-soft);
+}
+.pomo__notify:hover {
+  border-color: var(--fg);
+  color: var(--fg);
+}
+.pomo__notify[hidden] {
+  display: none;
+}
+.pomo__notify:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+/* ==========================================================================
+   13 动效：入场（浮起 + 淡入）
+   --------------------------------------------------------------------------
+   初始态一律挂在 .js 下 —— 这样没有 JS 时元素本来就是终态，内容一字不少。
+   （<head> 里有一行同步脚本给 <html> 加 .js，所以不会闪。）
+   延迟序号用 --i，由模板写在 style 里：transition-delay: calc(var(--i) * step)。
+   ========================================================================== */
+.js .reveal {
+  opacity: 0;
+  translate: 0 16px;
+  transition: opacity var(--mo-base) var(--mo-ease),
+    translate var(--mo-base) var(--mo-ease);
+  transition-delay: calc(var(--i, 0) * var(--mo-step));
+}
+.js .reveal.is-in {
+  opacity: 1;
+  translate: 0 0;
+}
+
+/* ==========================================================================
+   14 无 JS 兜底
+   ========================================================================== */
+.js .pomo__needs-js {
+  display: revert;
+}
+.pomo__needs-js {
+  display: none;
+}
+
+/* ==========================================================================
+   15 减少动效
+   --------------------------------------------------------------------------
+   边界：把初始态直接改成终态，而不是只把时长压到 0 ——
+   那样元素会永远停在 opacity:0 上不出现。
+   ========================================================================== */
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  .js .reveal {
+    opacity: 1;
+    translate: none;
+    transition: none;
+  }
+  .pomo__ring .is-progress,
+  .pomo__status-line::after,
+  .pomo__time,
+  .pomo__btn,
+  .pomo__step,
+  .pomo__task-submit,
+  .pomo__task-del {
+    transition: none;
+  }
+  /* 抖动是纯装饰：减少动效时关掉。
+     但空输入的「文字提示」必须保留 —— 那是唯一的反馈渠道，不能一起删。 */
+  .pomo__task-add.is-nudge {
+    animation: none;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+/* ==========================================================================
+   16 响应式
+   ========================================================================== */
+@media (max-width: 600px) {
+  .pomo__inner {
+    gap: 22px;
+  }
+  .pomo__dial {
+    width: min(64vw, 220px);
+  }
+  .pomo__btn {
+    padding: 10px 16px;
+  }
+  .pomo__btn--primary {
+    min-width: 100px;
+  }
+  /* 统计三列在窄屏下变一行，数字与标签并排 */
+  .pomo__stats {
+    grid-template-columns: 1fr;
+  }
+  .pomo__stat {
+    flex-direction: row;
+    justify-content: space-between;
+    padding: 12px 16px;
+  }
+  .pomo__stat b {
+    font-size: 18px;
+  }
+}
+
+/* 窄屏：导航转抽屉。
+   放在这里而不是 15 段的 600px 里 —— 断点是 900px，和其他响应式规则不同。 */
+@media (max-width: 900px) {
+  :root {
+    --header-h: 60px;
+  }
+
+  .header__nav {
+    position: absolute;
+    inset: var(--header-h) 0 auto 0;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0;
+    padding: 8px var(--gutter) 20px;
+    background: var(--bg);
+    border-bottom: 1px solid var(--line);
+    display: none;
+  }
+  /* 用 .is-open 而不是改 display —— 动画与无障碍状态都由这个类驱动 */
+  .header__nav.is-open {
+    display: flex;
+  }
+  .header__nav .header__link {
+    padding-block: 12px;
+    width: 100%;
+  }
+  /* 抽屉里不要那条下划线，改为整行可点 */
+  .header__nav .header__link::after {
+    display: none;
+  }
+  .header__toggle {
+    display: grid;
+  }
+}
+
+/* ==========================================================================
+   17 打印
+   --------------------------------------------------------------------------
+   全局复位必须含 opacity / translate / clip-path ——
+   否则「没滚到过」的入场元素会印成空白。
+   ========================================================================== */
+@media print {
+  *,
+  *::before,
+  *::after {
+    background: transparent !important;
+    color: #000 !important;
+    box-shadow: none !important;
+    text-shadow: none !important;
+    opacity: 1 !important;
+    translate: none !important;
+    scale: 1 !important;
+    clip-path: none !important;
+    transform: none !important;
+    transition: none !important;
+    animation: none !important;
+  }
+  .header,
+  .header__progress,
+  .skip,
+  .pomo__controls,
+  .pomo__settings,
+  .pomo__notify,
+  .pomo__task-add,
+  .pomo__task-del {
+    display: none !important;
+  }
+  .pomo__ring .is-progress,
+  .pomo__ring .is-track {
+    stroke: #000 !important;
+  }
+  .pomo__time {
+    color: #000 !important;
+  }
+  .pomo__step {
+    border-color: #000 !important;
+  }
+  .pomo__step.is-done {
+    background: #000 !important;
+  }
+}
+
+</style>
+</head>
+<body>
+<a class="skip" href="#main">跳到主要内容</a>
+<header class="header" id="site-header">
+  <div class="wrap header__inner">
+    <a class="header__brand" href="#top">番茄钟</a>
+    <nav class="header__nav" id="site-nav" aria-label="主导航">
+      <a class="header__link" href="#top">计时器</a>
+      <a class="header__link" href="#settings">设置</a>
+    </nav>
+    <button class="header__toggle" type="button" aria-label="打开菜单" aria-expanded="false" aria-controls="site-nav"><span></span></button>
+  </div>
+  <div class="header__progress" id="progress" aria-hidden="true"></div>
+</header>
+<main id="main">
+  <section class="pomo" id="top" data-phase="focus" aria-labelledby="pomo-title">
+    <div class="wrap pomo__inner">
+
+      <p class="pomo__eyebrow reveal" style="--i:0">POMODORO</p>
+      <h1 class="pomo__title reveal" id="pomo-title" style="--i:1">番茄钟</h1>
+      <p class="pomo__lead reveal" style="--i:1">专注 25 分钟，休息 5 分钟。四个番茄之后，休息久一点。</p>
+
+      <div class="pomo__dial reveal" style="--i:2">
+        <svg class="pomo__ring" viewBox="0 0 116 116" aria-hidden="true" focusable="false">
+        <circle class="is-track" cx="58" cy="58" r="52"></circle>
+        <circle class="is-progress" cx="58" cy="58" r="52"></circle>
+      </svg>
+        <p class="pomo__time" role="timer" aria-live="off">25:00</p>
+      </div>
+
+      <p class="pomo__label" aria-live="polite">专注中</p>
+
+      <ul class="pomo__steps" data-steps aria-hidden="true"><li class="pomo__step"></li><li class="pomo__step"></li><li class="pomo__step"></li><li class="pomo__step"></li></ul>
+
+      <div class="pomo__status-line reveal" style="--i:3" aria-hidden="true"></div>
+
+      <div class="pomo__controls reveal" style="--i:3">
+        <button class="pomo__btn pomo__btn--primary" type="button" data-action="toggle">开始</button>
+        <button class="pomo__btn" type="button" data-action="reset">重置</button>
+        <button class="pomo__btn pomo__btn--ghost" type="button" data-action="skip">跳过</button>
+      </div>
+
+      <div class="pomo__stats reveal" style="--i:4">
+        <div class="pomo__stat">
+          <b data-stat="done">0</b>
+          <span>今日番茄</span>
+        </div>
+        <div class="pomo__stat">
+          <b data-stat="minutes">0</b>
+          <span>专注分钟</span>
+        </div>
+        <div class="pomo__stat">
+          <b data-stat="streak">0</b>
+          <span>连续天数</span>
+        </div>
+      </div>
+
+      <section class="pomo__tasks reveal" style="--i:5" aria-labelledby="pomo-tasks-title">
+        <p class="pomo__tasks-head">
+          <span class="pomo__tasks-title" id="pomo-tasks-title">这轮要做什么</span>
+          <span class="pomo__tasks-count" data-tasks-count></span>
+        </p>
+
+        <!-- onsubmit="return false" 是第二道保险，不是主要逻辑：
+             正常路径由 pomodoro.js 的 submit 监听负责。
+             但如果脚本没成功运行（加载失败 / 早期报错），表单会走**原生提交**
+             把页面刷掉 —— 表现为「点了没反应，输入也没了」。
+             有这一行，最坏情况也只是"没加上"，不会丢输入、不会刷新。 -->
+        <form class="pomo__task-add" data-task-form onsubmit="return false">
+          <input class="pomo__task-input" id="pomo-task-input" data-task-input type="text"
+                 aria-label="这轮要做什么"
+                 placeholder="加一件事…" autocomplete="off"
+                 maxlength="120">
+          <button class="pomo__task-submit" type="submit">添加</button>
+        </form>
+
+        <!-- 空输入点「添加」时的反馈。
+             刻意做成「始终存在的 live region，只改文字」，而不是 hidden 切换：
+             display:none 的元素不在无障碍树里，取消 hidden 时读屏不一定播报，
+             结果就是视力正常用户有反馈、读屏用户仍然「没反应」。
+             提示文案放 data-hint-text，JS 负责搬进这个区域（内容与行为分离）。 -->
+        <p class="pomo__task-hint" data-task-hint
+           data-hint-text="先在上面写一件事，再点「添加」。"
+           role="status" aria-live="polite"></p>
+
+        <p class="pomo__task-empty" data-task-empty>还没有任务。写一件要专注完成的事。</p>
+        <ul class="pomo__task-list" data-task-list></ul>
+      </section>
+
+      <p class="pomo__hint pomo__needs-js reveal" style="--i:6">空格开始 / 暂停，R 重置，S 跳过。任务、设置与统计只存在这台设备的浏览器里，不上传任何数据；换设备或清理浏览器数据会丢失。</p>
+      <noscript><p class="pomo__hint">计时器需要 JavaScript。当前显示的是默认时长，开启脚本后即可使用。</p></noscript>
+
+      <details class="pomo__settings reveal" id="settings" style="--i:7">
+        <summary>设置</summary>
+        <div class="pomo__grid">
+          <div class="pomo__field">
+          <label for="set-focus">专注时长</label>
+          <input id="set-focus" data-set="focus" type="number" inputmode="numeric"
+                 min="1" max="180" step="1" value="25"
+                 aria-describedby="set-focus-unit">
+          <span id="set-focus-unit" hidden>分钟</span>
+        </div>
+          <div class="pomo__field">
+          <label for="set-short">短休息</label>
+          <input id="set-short" data-set="short" type="number" inputmode="numeric"
+                 min="1" max="60" step="1" value="5"
+                 aria-describedby="set-short-unit">
+          <span id="set-short-unit" hidden>分钟</span>
+        </div>
+          <div class="pomo__field">
+          <label for="set-long">长休息</label>
+          <input id="set-long" data-set="long" type="number" inputmode="numeric"
+                 min="1" max="120" step="1" value="15"
+                 aria-describedby="set-long-unit">
+          <span id="set-long-unit" hidden>分钟</span>
+        </div>
+          <div class="pomo__field">
+          <label for="set-cycle">每几个番茄长休息</label>
+          <input id="set-cycle" data-set="cycle" type="number" inputmode="numeric"
+                 min="1" max="12" step="1" value="4"
+                 aria-describedby="set-cycle-unit">
+          <span id="set-cycle-unit" hidden>个</span>
+        </div>
+        </div>
+
+        <p class="pomo__hint"><div class="pomo__theme">
+          <span class="pomo__theme-label">外观</span>
+          <label class="pomo__radio">
+            <input type="radio" name="pomo-theme" value="auto" data-theme-choice checked>
+            <span>跟随系统</span>
+          </label>
+          <label class="pomo__radio">
+            <input type="radio" name="pomo-theme" value="light" data-theme-choice>
+            <span>亮色</span>
+          </label>
+          <label class="pomo__radio">
+            <input type="radio" name="pomo-theme" value="dark" data-theme-choice>
+            <span>暗色</span>
+          </label>
+        </div></p>
+
+        <p class="pomo__hint">
+          <label><input type="checkbox" data-set="sound"> 阶段结束播放提示音</label><br>
+          <label><input type="checkbox" data-set="autoNext"> 自动进入下一阶段</label>
+        </p>
+
+        <button class="pomo__notify" type="button" data-notify hidden>开启桌面通知</button>
+
+        <p class="pomo__hint">
+          <button class="pomo__notify" type="button" data-clear-tasks>清空已完成任务</button>
+        </p>
+      </details>
+
+    </div>
+  </section>
+
+  <!-- 启动自检报警条：脚本没成功运行时由下面的内联脚本显示 -->
+  <p class="pomo__alert" data-boot-alert role="alert" hidden></p>
+</main>
+<footer class="footer">
+  <div class="wrap footer__inner">
+    <p>© 2026 番茄钟</p>
+    <p>原生 HTML / CSS / JS 手写，零依赖。</p>
+  </div>
+</footer>
+<script>
+/**
+ * 页壳脚本 —— 独立项目版
+ * ============================================================================
+ * 这是原来由「个人网站 assets/main.js」承担的部分，现在自带一份。
+ * 只做四件事，全部是渐进增强（没有 JS 时页面完全正常，只是不动）：
+ *
+ *   1. 入场：IntersectionObserver 给 .reveal 加 .is-in
+ *   2. 安全网：观察器不回调时兜底显示（防止白屏）
+ *   3. 阅读进度线
+ *   4. 移动端导航抽屉
+ *
+ * 不上动效库、不做视差/打字机 —— 番茄钟是工具，动效抢戏就是失败。
+ */
+
+(function () {
+  "use strict";
+
+  var root = document.documentElement;
+  // 只在标记了 .js 时接管（<head> 里已同步加上）
+  if (!root.classList.contains("js")) return;
+
+  var reduce =
+    window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  /* ------------------------------------------------------------------ *
+   * 1 + 2. 入场与安全网
+   * ------------------------------------------------------------------ */
+  var SELECTOR = ".reveal";
+
+  var revealAll = function () {
+    var els = document.querySelectorAll(SELECTOR);
+    for (var i = 0; i < els.length; i++) els[i].classList.add("is-in");
+  };
+
+  if (reduce) {
+    // 边界：减少动效时直接落终态。
+    // 不能只把时长压到 0 —— 那样元素会停在 opacity:0 上永远不出现。
+    revealAll();
+  } else if ("IntersectionObserver" in window) {
+    var io = new IntersectionObserver(
+      function (entries) {
+        entries.forEach(function (entry) {
+          if (entry.isIntersecting) {
+            entry.target.classList.add("is-in");
+            io.unobserve(entry.target);
+          }
+        });
+      },
+      { rootMargin: "0px 0px -8% 0px", threshold: 0.01 }
+    );
+
+    var targets = document.querySelectorAll(SELECTOR);
+    for (var j = 0; j < targets.length; j++) io.observe(targets[j]);
+
+    // 边界：不会白屏。
+    // 初始态是 opacity:0，万一观察器一次都不回调
+    // （无头环境、虚拟时间、浏览器怪异行为），2.6 秒后强制落终态。
+    window.setTimeout(revealAll, 2600);
+  } else {
+    // 环境不支持观察器
+    revealAll();
+  }
+
+  /* 首屏元素立即入场，避免出现「空一瞬」 */
+  window.requestAnimationFrame(function () {
+    var hero = document.querySelectorAll(".pomo__title, .pomo__eyebrow, .pomo__lead");
+    for (var i = 0; i < hero.length; i++) hero[i].classList.add("is-in");
+  });
+
+  /* ------------------------------------------------------------------ *
+   * 3. 阅读进度线
+   * ------------------------------------------------------------------ */
+  var progress = document.getElementById("progress");
+  var ticking = false;
+
+  var update = function () {
+    if (progress) {
+      var max = document.documentElement.scrollHeight - window.innerHeight;
+      var ratio = max > 0 ? Math.min(window.scrollY / max, 1) : 0;
+      progress.style.setProperty("--p", String(ratio));
+    }
+    ticking = false;
+  };
+
+  window.addEventListener(
+    "scroll",
+    function () {
+      if (!ticking) {
+        ticking = true;
+        window.requestAnimationFrame(update);
+      }
+    },
+    { passive: true }
+  );
+  update();
+
+  /* ------------------------------------------------------------------ *
+   * 4. 移动端抽屉
+   * ------------------------------------------------------------------ */
+  var toggle = document.querySelector(".header__toggle");
+  var nav = document.getElementById("site-nav");
+
+  if (toggle && nav) {
+    var setOpen = function (open) {
+      nav.classList.toggle("is-open", open);
+      toggle.setAttribute("aria-expanded", String(open));
+      toggle.setAttribute("aria-label", open ? "关闭菜单" : "打开菜单");
+    };
+
+    toggle.addEventListener("click", function () {
+      setOpen(!nav.classList.contains("is-open"));
+    });
+
+    // 点导航项后收起
+    nav.addEventListener("click", function (e) {
+      if (e.target.closest("a") && nav.classList.contains("is-open")) setOpen(false);
+    });
+
+    // Escape 收起并把焦点还给按钮（键盘用户不然会迷失焦点）
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && nav.classList.contains("is-open")) {
+        setOpen(false);
+        toggle.focus();
+      }
+    });
+  }
+})();
+
+</script>
+<script>
+/**
+ * 番茄钟 —— 计时状态机（完整版）
+ * ============================================================================
+ * 零依赖。与首页 main.js 同一套约定：
+ *   - 立即执行函数 + "use strict"
+ *   - 只在 <html class="js"> 时接管（无 JS 时页面显示静态默认值）
+ *   - 无 JS 时内容一字不少
+ *
+ * 相对占位版的增量：
+ *   - 任务列表（增删改、完成勾选）
+ *   - 今日统计（番茄数 / 专注分钟 / 连续天数，按自然日归档）
+ *   - 主题切换（自动 / 亮 / 暗）
+ *   - 键盘快捷键 R / S
+ *   - 存储升到 pomodoro:v2（不迁移旧数据，见 README）
+ *
+ * 四个设计要点，都是踩过的坑：
+ *
+ * 1. 不用 setInterval 累减计数。
+ *    后台标签页里 setInterval 会被节流到 ≥1s 甚至暂停，累减必然走慢。
+ *    这里用「记录目标时间戳 + rAF 只负责刷新显示」，
+ *    切回前台时读 Date.now() 一次就自动追平，不会累计误差。
+ *
+ * 2. 阶段切换走 settle() 单一入口。
+ *    任何路径（计时归零、点跳过）都走它，避免状态散落。
+ *
+ * 3. 「今日」以本地自然日为准（YYYY-MM-DD），不用 UTC。
+ *    用 toISOString 会在东八区把凌晨 0–8 点的番茄算到前一天。
+ *
+ * 4. 所有写入 localStorage 的路径都包 try/catch。
+ *    隐私模式下 setItem 会抛异常，不能让整个计时器挂掉。
+ */
+
+(function () {
+  "use strict";
+
+  var root = document.documentElement;
+  if (!root.classList.contains("js")) return;
+
+  /* ------------------------------------------------------------ 常量 ------ */
+
+  var STORE_KEY = "pomodoro:v2";
+
+  // 阶段定义。id 同时是 DOM 上的 data-phase 值，CSS 靠它配色。
+  var PHASES = {
+    focus: { label: "专注中" },
+    short: { label: "短休息" },
+    long: { label: "长休息" }
+  };
+
+  // 默认设置（分钟）。改这里等于改「无 JS 时的静态展示值」。
+  var DEFAULTS = {
+    focus: 25,
+    short: 5,
+    long: 15,
+    // 每完成多少个番茄进入一次长休息
+    cycle: 4,
+    // 自动开始下一阶段：默认关（自用场景更希望自己掌控节奏）
+    autoNext: false,
+    sound: true,
+    // auto | light | dark
+    theme: "auto"
+  };
+
+  // 各设置项的合法区间。手输也会被钳到这里。
+  var LIMITS = {
+    focus: [1, 180],
+    short: [1, 60],
+    long: [1, 120],
+    cycle: [1, 12]
+  };
+
+  // 任务名长度上限（与模板里的 maxlength 一致）
+  var TASK_MAX = 120;
+
+  // 统计保留天数：只留最近 60 天，避免 localStorage 无限膨胀
+  var HISTORY_DAYS = 60;
+
+  /* ------------------------------------------------------------ 工具 ------ */
+
+  var $ = function (sel) {
+    return document.querySelector(sel);
+  };
+
+  var clamp = function (n, lo, hi) {
+    return Math.min(hi, Math.max(lo, n));
+  };
+
+  // 秒 → mm:ss（超过 100 分钟也能正确显示，不截断）
+  var fmt = function (totalSec) {
+    var s = Math.max(0, Math.ceil(totalSec));
+    var m = Math.floor(s / 60);
+    var r = s % 60;
+    return (m < 10 ? "0" : "") + m + ":" + (r < 10 ? "0" : "") + r;
+  };
+
+  /**
+   * 本地自然日的 YYYY-MM-DD。
+   * 不能用 toISOString().slice(0,10) —— 那是 UTC，
+   * 东八区凌晨 0–8 点会被算成前一天。
+   */
+  var today = function () {
+    var d = new Date();
+    var m = d.getMonth() + 1;
+    var day = d.getDate();
+    return (
+      d.getFullYear() + "-" + (m < 10 ? "0" : "") + m + "-" + (day < 10 ? "0" : "") + day
+    );
+  };
+
+  // 生成唯一 id。不用 crypto.randomUUID（老浏览器没有）
+  var uid = function () {
+    return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  };
+
+  /* -------------------------------------------------------- 状态与存储 --- */
+
+  var state = {
+    phase: "focus",
+    duration: DEFAULTS.focus * 60,
+    endAt: null,
+    remain: DEFAULTS.focus * 60,
+    running: false,
+    // 本轮 cycle 内已完成的番茄数（0..cycle）
+    cycleDone: 0
+  };
+
+  var settings = Object.assign({}, DEFAULTS);
+
+  // 历史：{ "2026-10-15": { done: 3, seconds: 4500 }, ... }
+  var history = {};
+
+  // 任务：[{ id, text, done, createdAt }]
+  var tasks = [];
+
+  var loadAll = function () {
+    var raw;
+    try {
+      raw = localStorage.getItem(STORE_KEY);
+    } catch (e) {
+      return; // 隐私模式下读不了，用默认值
+    }
+    if (!raw) return;
+
+    var saved;
+    try {
+      saved = JSON.parse(raw);
+    } catch (e) {
+      return; // 内容损坏：整份丢弃，用默认值（比崩掉好）
+    }
+    if (!saved || typeof saved !== "object") return;
+
+    /* —— 设置：逐项校验 ——
+       类型不对或超范围的回落默认值，但**不整份丢弃**，
+       其他项的有效设置应当保留。 */
+    Object.keys(DEFAULTS).forEach(function (k) {
+      var v = saved.settings ? saved.settings[k] : undefined;
+
+      if (typeof DEFAULTS[k] === "number") {
+        if (typeof v === "number" && isFinite(v)) {
+          settings[k] = clamp(Math.round(v), LIMITS[k][0], LIMITS[k][1]);
+        }
+      } else if (typeof DEFAULTS[k] === "boolean") {
+        if (typeof v === "boolean") settings[k] = v;
+      } else if (k === "theme") {
+        if (v === "auto" || v === "light" || v === "dark") settings.theme = v;
+      }
+    });
+
+    // 主题引导脚本已经把 data-theme 写在 <html> 上了，这里保持一致
+
+    /* —— 历史：只收形状正确的条目 —— */
+    if (saved.history && typeof saved.history === "object") {
+      Object.keys(saved.history).forEach(function (day) {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return;
+        var e = saved.history[day];
+        if (!e || typeof e !== "object") return;
+        var done = typeof e.done === "number" && isFinite(e.done) && e.done >= 0
+          ? Math.floor(e.done) : 0;
+        var secs = typeof e.seconds === "number" && isFinite(e.seconds) && e.seconds >= 0
+          ? Math.floor(e.seconds) : 0;
+        history[day] = { done: done, seconds: secs };
+      });
+    }
+
+    /* —— 任务 —— */
+    if (Array.isArray(saved.tasks)) {
+      tasks = saved.tasks
+        .filter(function (t) {
+          return t && typeof t.text === "string" && t.text.trim();
+        })
+        .slice(0, 200) // 上限，防脏数据
+        .map(function (t) {
+          return {
+            id: typeof t.id === "string" && t.id ? t.id : uid(),
+            text: t.text.trim().slice(0, TASK_MAX),
+            done: !!t.done,
+            createdAt: typeof t.createdAt === "number" ? t.createdAt : Date.now()
+          };
+        });
+    }
+
+    // 本轮 cycle 进度也存，刷新页面不丢
+    if (typeof saved.cycleDone === "number" && isFinite(saved.cycleDone) && saved.cycleDone >= 0) {
+      state.cycleDone = Math.floor(saved.cycleDone) % Math.max(1, settings.cycle);
+    }
+  };
+
+  var save = function () {
+    try {
+      localStorage.setItem(
+        STORE_KEY,
+        JSON.stringify({
+          v: 2,
+          settings: settings,
+          history: history,
+          tasks: tasks,
+          cycleDone: state.cycleDone
+        })
+      );
+    } catch (e) {
+      /* 存不进去（隐私模式 / 配额满）也不影响本次使用 */
+    }
+  };
+
+  /* ---------------------------------------------------------- DOM 引用 --- */
+
+  var el = {
+    page: $(".pomo"),
+    time: $(".pomo__time"),
+    label: $(".pomo__label"),
+    ring: $(".pomo__ring .is-progress"),
+    statusLine: $(".pomo__status-line"),
+    steps: $("[data-steps]"),
+    primary: $('[data-action="toggle"]'),
+    reset: $('[data-action="reset"]'),
+    skip: $('[data-action="skip"]'),
+    // 用 data-notify 精确定位：.pomo__notify 这个类名同时被
+    // 「清空已完成任务」按钮复用，靠 $(".pomo__notify") 取首个太脆弱
+    notify: $("[data-notify]"),
+    stats: {
+      done: $('[data-stat="done"]'),
+      minutes: $('[data-stat="minutes"]'),
+      streak: $('[data-stat="streak"]')
+    },
+    task: {
+      form: $("[data-task-form]"),
+      input: $("[data-task-input]"),
+      list: $("[data-task-list]"),
+      empty: $("[data-task-empty]"),
+      count: $("[data-tasks-count]"),
+      clear: $("[data-clear-tasks]"),
+      // 空输入时的提示（默认隐藏，仅在有反馈需要时露出）
+      hint: $("[data-task-hint]")
+    },
+    fields: {
+      focus: $('[data-set="focus"]'),
+      short: $('[data-set="short"]'),
+      long: $('[data-set="long"]'),
+      cycle: $('[data-set="cycle"]')
+    }
+  };
+
+  if (!el.page || !el.time) return;
+
+  /* 环半径，必须与 src/index.mjs 里 RING_R 一致。
+     周长按它实算 —— 写死数字会在改半径时错位（进度环就会走不到头）。 */
+  var RADIUS = 52;
+  var CIRC = 2 * Math.PI * RADIUS;
+
+  // 环的周长按 SVG 实际半径算，写死会在改尺寸时错位
+  if (el.ring) el.ring.setAttribute("stroke-dasharray", String(CIRC));
+
+  /* -------------------------------------------------------- 渲染：计时 --- */
+
+  var render = function () {
+    var remain = state.running
+      ? Math.max(0, (state.endAt - Date.now()) / 1000)
+      : state.remain;
+
+    el.time.textContent = fmt(remain);
+
+    // 进度：已走过的比例（0 → 1）
+    var ratio = state.duration > 0 ? clamp(1 - remain / state.duration, 0, 1) : 0;
+
+    if (el.ring) {
+      // dashoffset 从 0 到 CIRC：0 = 整圈，CIRC = 空
+      el.ring.style.strokeDashoffset = String(CIRC * ratio);
+    }
+    el.page.style.setProperty("--p", String(ratio));
+
+    el.label.textContent = PHASES[state.phase].label;
+
+    if (el.primary) {
+      el.primary.textContent = state.running
+        ? "暂停"
+        : remain < state.duration
+        ? "继续"
+        : "开始";
+    }
+
+    // 标签页标题：切到别的标签时也能瞄一眼进度
+    document.title = state.running
+      ? fmt(remain) + " · " + PHASES[state.phase].label + " · 番茄钟"
+      : "番茄钟";
+  };
+
+  /* ------------------------------------------------------ 渲染：进度点 --- */
+
+  var renderSteps = function () {
+    if (!el.steps) return;
+
+    var total = Math.max(1, settings.cycle);
+    var kids = el.steps.children;
+
+    // 设置里改了 cycle 之后点数要对得上：多退少补
+    while (kids.length > total) el.steps.removeChild(el.steps.lastChild);
+    while (kids.length < total) {
+      var li = document.createElement("li");
+      li.className = "pomo__step";
+      el.steps.appendChild(li);
+    }
+
+    // cycleDone 可能因为调小 cycle 而超出范围，取模兜底
+    var done = state.cycleDone % total;
+
+    for (var i = 0; i < total; i++) {
+      var node = kids[i];
+      node.classList.toggle("is-done", i < done);
+      node.classList.toggle("is-now", i === done && state.phase === "focus");
+    }
+  };
+
+  /* ------------------------------------------------------ 渲染：统计 ----- */
+
+  /**
+   * 连续天数：从今天（或昨天）往前数，连续有番茄记录的天数。
+   *
+   * 「今天还没开始」不该把连续记录清零 —— 所以起点允许是昨天：
+   * 今天有记录就从今天数，没有就从昨天数。都没有则是 0。
+   */
+  var calcStreak = function () {
+    var d = new Date();
+    var key = function (dt) {
+      var m = dt.getMonth() + 1;
+      var day = dt.getDate();
+      return dt.getFullYear() + "-" + (m < 10 ? "0" : "") + m + "-" + (day < 10 ? "0" : "") + day;
+    };
+
+    var has = function (dt) {
+      var e = history[key(dt)];
+      return !!(e && e.done > 0);
+    };
+
+    // 今天没有记录，就从昨天起算；昨天也没有则为 0
+    if (!has(d)) {
+      d.setDate(d.getDate() - 1);
+      if (!has(d)) return 0;
+    }
+
+    var n = 0;
+    // 上限 365，防脏数据造成死循环
+    for (var i = 0; i < 365; i++) {
+      if (!has(d)) break;
+      n++;
+      d.setDate(d.getDate() - 1);
+    }
+    return n;
+  };
+
+  var renderStats = function () {
+    var todayEntry = history[today()] || { done: 0, seconds: 0 };
+
+    if (el.stats.done) el.stats.done.textContent = String(todayEntry.done);
+
+    if (el.stats.minutes) {
+      // 只显示整分钟；不足 1 分钟显示 0
+      el.stats.minutes.textContent = String(Math.floor(todayEntry.seconds / 60));
+    }
+
+    if (el.stats.streak) el.stats.streak.textContent = String(calcStreak());
+  };
+
+  /* ------------------------------------------------------ 渲染：任务 ----- */
+
+  var renderTasks = function () {
+    if (!el.task.list) return;
+
+    el.task.list.textContent = "";
+
+    tasks.forEach(function (t) {
+      var li = document.createElement("li");
+      li.className = "pomo__task-item" + (t.done ? " is-done" : "");
+      li.setAttribute("data-id", t.id);
+
+      var check = document.createElement("input");
+      check.type = "checkbox";
+      check.className = "pomo__task-check";
+      check.checked = t.done;
+      // 读屏需要知道这个勾选框对应哪件事
+      check.setAttribute("aria-label", t.text);
+      check.addEventListener("change", function () {
+        t.done = check.checked;
+        li.classList.toggle("is-done", t.done);
+        save();
+        renderTaskMeta();
+      });
+
+      var span = document.createElement("span");
+      span.className = "pomo__task-text";
+      // 用 textContent 而不是 innerHTML —— 任务名是用户输入，必须转义
+      span.textContent = t.text;
+
+      var del = document.createElement("button");
+      del.type = "button";
+      del.className = "pomo__task-del";
+      del.textContent = "×";
+      del.setAttribute("aria-label", "删除任务：" + t.text);
+      del.addEventListener("click", function () {
+        tasks = tasks.filter(function (x) {
+          return x.id !== t.id;
+        });
+        save();
+        renderTasks();
+      });
+
+      li.appendChild(check);
+      li.appendChild(span);
+      li.appendChild(del);
+      el.task.list.appendChild(li);
+    });
+
+    renderTaskMeta();
+  };
+
+  var renderTaskMeta = function () {
+    var total = tasks.length;
+    var left = tasks.filter(function (t) {
+      return !t.done;
+    }).length;
+
+    if (el.task.empty) {
+      // 有任务时藏掉空状态（用 hidden 属性，CSS 里有对应规则）
+      el.task.empty.hidden = total > 0;
+    }
+
+    if (el.task.count) {
+      el.task.count.textContent = total ? left + " / " + total + " 待办" : "";
+    }
+
+    if (el.task.clear) {
+      // 没有已完成任务时禁用，避免点了没反应
+      el.task.clear.disabled = !tasks.some(function (t) {
+        return t.done;
+      });
+    }
+  };
+
+  /* ------------------------------------------------------ 主题 ---------- */
+
+  var applyTheme = function () {
+    if (settings.theme === "auto") {
+      // 移除属性 → 回落到 CSS 的 prefers-color-scheme
+      root.removeAttribute("data-theme");
+    } else {
+      root.setAttribute("data-theme", settings.theme);
+    }
+
+    // 同步 radio 选中态（加载时用）
+    var radios = document.querySelectorAll("[data-theme-choice]");
+    Array.prototype.forEach.call(radios, function (r) {
+      r.checked = r.value === settings.theme;
+    });
+  };
+
+  /* -------------------------------------------------------- 计时循环 ----- */
+
+  var raf = 0;
+  var tick = function () {
+    if (!state.running) return;
+
+    var left = (state.endAt - Date.now()) / 1000;
+
+    if (left <= 0) {
+      // 归零：先落终态再切换，避免负值闪一帧
+      state.running = false;
+      state.remain = 0;
+      render();
+      settle(true);
+      return;
+    }
+
+    render();
+    // rAF 驱动显示刷新；后台标签页 rAF 会被暂停，
+    // 但那只影响显示 —— 计时依据是时间戳，切回来立刻正确。
+    raf = window.requestAnimationFrame(tick);
+  };
+
+  var startLoop = function () {
+    window.cancelAnimationFrame(raf);
+    tick();
+  };
+
+  /* -------------------------------------------------------- 状态切换 ----- */
+
+  var phaseSeconds = function (phase) {
+    return settings[phase] * 60;
+  };
+
+  /**
+   * 切到指定阶段。
+   * @param {string} phase  focus | short | long
+   * @param {boolean} auto  是否自动开始（结算完成时按 autoNext 决定）
+   */
+  var goPhase = function (phase, auto) {
+    state.phase = phase;
+    state.duration = phaseSeconds(phase);
+    state.remain = state.duration;
+    state.running = false;
+    state.endAt = null;
+    el.page.setAttribute("data-phase", phase);
+    renderSteps();
+
+    if (auto) {
+      state.running = true;
+      state.endAt = Date.now() + state.remain * 1000;
+      startLoop();
+    } else {
+      render();
+    }
+  };
+
+  /**
+   * 单一结算入口：计时归零或手动跳过都走这里。
+   * @param {boolean} completed 是否自然走完（区别于手动跳过）
+   */
+  var settle = function (completed) {
+    window.cancelAnimationFrame(raf);
+
+    var finished = state.phase;
+
+    if (finished === "focus") {
+      if (completed) {
+        // 记账：今天的番茄数 +1，专注秒数加上本阶段时长
+        var day = today();
+        if (!history[day]) history[day] = { done: 0, seconds: 0 };
+        history[day].done += 1;
+        history[day].seconds += state.duration;
+
+        state.cycleDone += 1;
+        trimHistory();
+        save();
+        renderStats();
+      }
+
+      // 满 cycle 个番茄 → 长休息，否则短休息
+      var isLong =
+        completed && state.cycleDone > 0 && state.cycleDone % settings.cycle === 0;
+
+      // 走完一轮 cycle 后把进度点归零，进入新的一轮
+      if (isLong) {
+        state.cycleDone = 0;
+        save();
+      }
+
+      goPhase(isLong ? "long" : "short", settings.autoNext);
+    } else {
+      // 休息结束 → 回到专注
+      goPhase("focus", settings.autoNext);
+    }
+
+    notify(finished, state.phase);
+  };
+
+  // 只保留最近 HISTORY_DAYS 天，避免 localStorage 无限膨胀
+  var trimHistory = function () {
+    var keys = Object.keys(history).sort();
+    if (keys.length <= HISTORY_DAYS) return;
+    keys.slice(0, keys.length - HISTORY_DAYS).forEach(function (k) {
+      delete history[k];
+    });
+  };
+
+  /* -------------------------------------------------------- 通知与声音 --- */
+
+  var audioCtx = null;
+
+  // 用 WebAudio 合成一声短音，避免额外的音频文件请求
+  var beep = function () {
+    if (!settings.sound) return;
+    try {
+      var Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return;
+      if (!audioCtx) audioCtx = new Ctx();
+      if (audioCtx.state === "suspended") audioCtx.resume();
+
+      var osc = audioCtx.createOscillator();
+      var gain = audioCtx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = 660;
+
+      var t = audioCtx.currentTime;
+      // 淡入淡出，避免爆音
+      gain.gain.setValueAtTime(0.0001, t);
+      gain.gain.exponentialRampToValueAtTime(0.18, t + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.9);
+
+      osc.connect(gain).connect(audioCtx.destination);
+      osc.start(t);
+      osc.stop(t + 1);
+    } catch (e) {
+      /* 浏览器未授权音频等：静默失败 */
+    }
+  };
+
+  var notify = function (from, to) {
+    beep();
+
+    if (typeof Notification === "undefined" || Notification.permission !== "granted") {
+      return;
+    }
+    var body = from === "focus" ? "专注结束，去休息一下。" : "休息结束，回来继续。";
+    try {
+      new Notification(PHASES[to].label + " · 番茄钟", {
+        body: body,
+        // 同 tag 覆盖上一条，避免通知堆积
+        tag: "pomodoro"
+      });
+    } catch (e) {
+      /* 部分环境禁止页面构造通知 */
+    }
+  };
+
+  /* -------------------------------------------------------- 可见性补偿 --- */
+
+  // 从后台切回前台时立刻校正一次显示。
+  // 计时本身不依赖定时器，这里只是让界面马上追上真实剩余时间。
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState !== "visible") return;
+    if (!state.running) return;
+
+    if (Date.now() >= state.endAt) {
+      state.running = false;
+      state.remain = 0;
+      render();
+      settle(true);
+    } else {
+      render();
+      startLoop();
+    }
+  });
+
+  /* -------------------------------------------------------- 交互 --------- */
+
+  var toggle = function () {
+    if (state.running) {
+      // 暂停：把剩余时间固化下来
+      state.remain = Math.max(0, (state.endAt - Date.now()) / 1000);
+      state.running = false;
+      state.endAt = null;
+      window.cancelAnimationFrame(raf);
+      render();
+    } else {
+      // 从头开始 或 继续
+      if (state.remain <= 0) state.remain = state.duration;
+      state.running = true;
+      state.endAt = Date.now() + state.remain * 1000;
+      startLoop();
+    }
+  };
+
+  var doReset = function () {
+    window.cancelAnimationFrame(raf);
+    state.running = false;
+    state.remain = state.duration;
+    state.endAt = null;
+    render();
+  };
+
+  if (el.primary) el.primary.addEventListener("click", toggle);
+  if (el.reset) el.reset.addEventListener("click", doReset);
+  if (el.skip) {
+    el.skip.addEventListener("click", function () {
+      // 手动跳过不计入完成数
+      settle(false);
+    });
+  }
+
+  /* 键盘快捷键：空格 / R / S。
+     焦点在输入控件上时一律不拦截，否则会吃掉正常输入。 */
+  document.addEventListener("keydown", function (e) {
+    var t = e.target;
+    var tag = t && t.tagName;
+    if (tag === "INPUT" || tag === "BUTTON" || tag === "TEXTAREA" || tag === "SELECT" || (t && t.isContentEditable)) {
+      return;
+    }
+    // 带修饰键的组合留给浏览器（Ctrl+R 刷新等）
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+    if (e.key === " " || e.code === "Space") {
+      e.preventDefault();
+      toggle();
+    } else if (e.key === "r" || e.key === "R") {
+      e.preventDefault();
+      doReset();
+    } else if (e.key === "s" || e.key === "S") {
+      e.preventDefault();
+      settle(false);
+    }
+  });
+
+  /* -------------------------------------------------------- 任务交互 ----- */
+
+  /**
+   * 输入框为空时的可见反馈。
+   *
+   * 为什么要有：早先「空输入点添加」是**彻底静默的** —— 没有新任务、
+   * 没有提示、焦点也不动。用户唯一能得到的结论就是「点了没反应」。
+   * 现在改为：聚焦输入框 + 输入框抖一下 + 显示一行提示。
+   */
+  var nudgeTimer = 0;
+
+  var nudgeEmptyInput = function () {
+    var input = el.task.input;
+    if (!input) return;
+
+    input.focus();
+
+    // 抖动动画：加类 → 400ms 后移除，方便下次再触发
+    var form = el.task.form;
+    if (form) {
+      form.classList.remove("is-nudge");
+      // 强制重排，否则连续两次空点击时动画不会重播
+      void form.offsetWidth;
+      form.classList.add("is-nudge");
+      window.setTimeout(function () {
+        form.classList.remove("is-nudge");
+      }, 420);
+    }
+
+    /* 提示文字写进 live region。
+       用 textContent 而不是切换 hidden —— 见模板里的说明。 */
+    var hint = el.task.hint;
+    if (hint) {
+      window.clearTimeout(nudgeTimer);
+      hint.textContent = hint.getAttribute("data-hint-text") || "先写一件事再添加。";
+      nudgeTimer = window.setTimeout(function () {
+        if (hint) hint.textContent = "";
+      }, 3200);
+    }
+  };
+
+  /** 把当前输入框内容加成一条任务。返回是否添加成功。 */
+  var addTask = function () {
+    if (!el.task.input) return false;
+
+    var text = el.task.input.value.trim().slice(0, TASK_MAX);
+    if (!text) {
+      nudgeEmptyInput();
+      return false;
+    }
+
+    tasks.push({ id: uid(), text: text, done: false, createdAt: Date.now() });
+    el.task.input.value = "";
+
+    // 提示条在成功添加后不再需要
+    if (el.task.hint) {
+      window.clearTimeout(nudgeTimer);
+      el.task.hint.textContent = "";
+    }
+
+    save();
+    renderTasks();
+    el.task.input.focus();
+
+    // 新任务可能落在视野外，滚到可视区
+    var last = el.task.list && el.task.list.lastElementChild;
+    if (last && last.scrollIntoView) {
+      last.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+    return true;
+  };
+
+  if (el.task.form) {
+    el.task.form.addEventListener("submit", function (e) {
+      // 阻止表单默认提交（会让页面刷新、计时丢失）
+      e.preventDefault();
+      addTask();
+    });
+  }
+
+  /* 回车提交。
+     ------------------------------------------------------------------------
+     单独处理而不是只靠表单的隐式提交，原因有二：
+       1. 部分浏览器/场景下隐式提交不触发（实测 CDP 合成按键就不触发）
+       2. 中文输入法里回车是「确认候选词」，不能当成提交
+          —— 用 isComposing / 组合状态把它们分开，否则打「重点」时
+          按回车选词会误加任务。 */
+  var composing = false;
+
+  if (el.task.input) {
+    el.task.input.addEventListener("compositionstart", function () {
+      composing = true;
+    });
+    el.task.input.addEventListener("compositionend", function () {
+      composing = false;
+    });
+
+    el.task.input.addEventListener("keydown", function (e) {
+      if (e.key !== "Enter") return;
+      // 输入法正在组词：这一次回车属于输入法，放行
+      if (e.isComposing || composing || e.keyCode === 229) return;
+
+      e.preventDefault();
+      addTask();
+    });
+  }
+
+  if (el.task.clear) {
+    el.task.clear.addEventListener("click", function () {
+      tasks = tasks.filter(function (t) {
+        return !t.done;
+      });
+      save();
+      renderTasks();
+    });
+  }
+
+  /* -------------------------------------------------------- 设置同步 ----- */
+
+  var pushSettingsToInputs = function () {
+    Object.keys(el.fields).forEach(function (k) {
+      var input = el.fields[k];
+      if (input) input.value = String(settings[k]);
+    });
+    var auto = $('[data-set="autoNext"]');
+    if (auto) auto.checked = settings.autoNext;
+    var snd = $('[data-set="sound"]');
+    if (snd) snd.checked = settings.sound;
+  };
+
+  Object.keys(el.fields).forEach(function (key) {
+    var input = el.fields[key];
+    if (!input) return;
+
+    var commit = function () {
+      var n = parseInt(input.value, 10);
+      if (!isFinite(n)) n = DEFAULTS[key];
+
+      var lim = LIMITS[key];
+      n = clamp(n, lim[0], lim[1]);
+      // 回写钳制后的值，让用户看到实际生效的数字
+      input.value = String(n);
+      settings[key] = n;
+      save();
+
+      // cycle 改了要重画进度点
+      if (key === "cycle") {
+        state.cycleDone = state.cycleDone % Math.max(1, settings.cycle);
+        renderSteps();
+      }
+
+      // 改动当前阶段时长时，若计时未开始，立即同步显示
+      if (key === state.phase && !state.running) {
+        state.duration = phaseSeconds(state.phase);
+        state.remain = state.duration;
+        render();
+      }
+    };
+
+    input.addEventListener("change", commit);
+    input.addEventListener("blur", commit);
+  });
+
+  var autoBox = $('[data-set="autoNext"]');
+  if (autoBox) {
+    autoBox.addEventListener("change", function () {
+      settings.autoNext = !!autoBox.checked;
+      save();
+    });
+  }
+
+  var soundBox = $('[data-set="sound"]');
+  if (soundBox) {
+    soundBox.addEventListener("change", function () {
+      settings.sound = !!soundBox.checked;
+      save();
+    });
+  }
+
+  /* 主题单选 */
+  Array.prototype.forEach.call(document.querySelectorAll("[data-theme-choice]"), function (radio) {
+    radio.addEventListener("change", function () {
+      if (!radio.checked) return;
+      settings.theme = radio.value;
+      applyTheme();
+      save();
+    });
+  });
+
+  /* -------------------------------------------------------- 通知授权 ----- */
+
+  var syncNotifyButton = function () {
+    if (!el.notify) return;
+    if (typeof Notification === "undefined") {
+      el.notify.hidden = true;
+      return;
+    }
+    if (Notification.permission === "granted") {
+      el.notify.hidden = true;
+      el.notify.textContent = "已开启通知";
+    } else if (Notification.permission === "denied") {
+      // 已被拒绝：浏览器不允许再次弹窗，只能提示去手动改
+      el.notify.hidden = false;
+      el.notify.textContent = "通知被浏览器阻止，需在站点设置里恢复";
+      el.notify.disabled = true;
+    } else {
+      el.notify.hidden = false;
+      el.notify.textContent = "开启桌面通知";
+      el.notify.disabled = false;
+    }
+  };
+
+  if (el.notify) {
+    el.notify.addEventListener("click", function () {
+      if (typeof Notification === "undefined") return;
+      Notification.requestPermission().then(syncNotifyButton).catch(syncNotifyButton);
+    });
+  }
+
+  /* -------------------------------------------------------- 启动 --------- */
+
+  loadAll();
+  pushSettingsToInputs();
+  applyTheme();
+  syncNotifyButton();
+
+  el.page.setAttribute("data-phase", state.phase);
+  state.duration = phaseSeconds("focus");
+  state.remain = state.duration;
+
+  render();
+  renderSteps();
+  renderStats();
+  renderTasks();
+
+  /* 告诉页面的启动自检：脚本确实跑到了最后。
+     没有这一行，index.html 的报警条会在 1.5 秒后误报"脚本没运行"。 */
+  window.__POMO_BOOTED = true;
+})();
+
+</script>
+<!-- 启动自检。
+     目的：脚本加载失败 / 早期抛错时，不要让用户只看到"点了没反应"，
+     而是直接说明原因 —— 否则排查要来回好几轮。
+     注意这段**必须内联且不 defer**：外部脚本挂了它也照样执行。 -->
+<script>
+(function () {
+  window.setTimeout(function () {
+    if (window.__POMO_BOOTED) return;
+    var el = document.querySelector("[data-boot-alert]");
+    if (!el) return;
+    var srcs = [];
+    var nodes = document.querySelectorAll("script[src]");
+    for (var i = 0; i < nodes.length; i++) srcs.push(nodes[i].getAttribute("src"));
+    el.textContent =
+      "计时脚本没有成功运行，所以按钮暂时无效。" +
+      "常见原因：① assets 目录没有和 index.html 放在同一层；" +
+      "② 浏览器拦截了本地脚本（试试用 npm run dev 起本地服务器访问）；" +
+      "③ 控制台有红色报错。" +
+      "应有的脚本：" + (srcs.join("、") || "(无)");
+    el.hidden = false;
+  }, 1500);
+})();
+</script>
+</body>
+</html>
