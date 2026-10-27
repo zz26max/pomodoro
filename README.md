@@ -152,6 +152,20 @@ assets/main.js
 
 没有路由、没有服务端要求，子目录部署也能用（**所有资源都是相对路径**）。
 
+### 线上地址与发布方式
+
+本站部署在 **GitHub Pages**：<https://zz26max.github.io/pomodoro/>
+（仓库 `zz26max/pomodoro`，由 `main` 分支根目录发布，push 后自动构建）。
+
+所以 **`index.html` 与 `番茄钟-单文件.html` 必须提交进仓库**：
+
+- Pages 只发布仓库里真实存在的文件，不会替你跑 `npm run build`；
+- 一旦把这两个文件写回 `.gitignore`，线上会退化成 GitHub 用 Jekyll 渲染的 `README.md`，
+  番茄钟本身打不开——页面看起来"有内容"，但计时器根本没加载。
+
+发布流程：`npm run build` → `git add -A && git commit` → `git push`，等 Pages 构建完成即可。
+改了 `assets/` 或 `src/` 却忘了重新 build，线上会停在旧的产物上。
+
 ---
 
 ## 改默认时长要注意
